@@ -2,12 +2,12 @@ use core::fmt;
 use core::ops::{Deref, DerefMut};
 
 use super::common::*;
-#[cfg(feature = "blind-keys")]
-use super::edwards25519::{ge_scalarmult, sc_invert, sc_mul};
 use super::edwards25519::{
-    ge_scalarmult_base, is_identity, sc_muladd, sc_reduce, sc_reduce32, sc_reject_noncanonical,
-    GeP2, GeP3,
+    ge_scalarmult, ge_scalarmult_base, is_identity, sc_muladd, sc_reduce, sc_reduce32,
+    sc_reject_noncanonical, GeP2, GeP3,
 };
+#[cfg(feature = "blind-keys")]
+use super::edwards25519::{sc_invert, sc_mul};
 use super::error::Error;
 use super::sha512;
 
@@ -32,6 +32,21 @@ impl PublicKey {
         }
         pk_.copy_from_slice(pk);
         Ok(PublicKey::new(pk_))
+    }
+
+    /// Multiply the point represented by the public key by the scalar.
+    ///
+    /// If all you need is ECDH, use the `x25519` module instead.
+    /// However, if you need signing and ECDH using the same key, you
+    /// may use this function.
+    pub fn dh(&self, sk: &SecretKey) -> Result<[u8; 32], Error> {
+        let (scalar, _) = {
+            let hash_output = sha512::Hash::hash(&sk.seed()[..]);
+            KeyPair::split(&hash_output, false, true)
+        };
+        let ge = GeP3::from_bytes_vartime(&self.0).ok_or(Error::InvalidPublicKey)?;
+
+        Ok(ge_scalarmult(&scalar, &ge).to_bytes())
     }
 }
 
@@ -949,4 +964,15 @@ fn test_ed25519_invalid_keypair() {
     assert!(kp1.sk.validate_public_key(&kp1.pk).is_ok());
     assert!(kp2.sk.validate_public_key(&kp2.pk).is_ok());
     assert!(kp1.validate().is_ok());
+}
+
+#[test]
+fn test_e25519_dh() {
+    let kp_a = KeyPair::generate();
+    let kp_b = KeyPair::generate();
+
+    let output_a = kp_b.pk.dh(&kp_a.sk).unwrap();
+    let output_b = kp_a.pk.dh(&kp_b.sk).unwrap();
+
+    assert_eq!(output_a, output_b);
 }
